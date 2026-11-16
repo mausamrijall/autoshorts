@@ -114,6 +114,30 @@ When you first launch the application, you will be greeted by an **Onboarding Wi
 
 ---
 
+## 🚀 Google Colab (GPU) Pipeline
+
+Run the full AutoShorts pipeline — media ingestion → **GPU-accelerated Whisper transcription** → AI viral-moment ranking → vertical clip rendering — entirely in your browser on Google Colab's free **NVIDIA GPU**. Nothing to install locally.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mausamrijall/autoshorts/blob/main/colab/AutoShorts_Colab.ipynb)
+
+**What it does**
+1. Clones this repository into the Colab runtime.
+2. Uses the free **NVIDIA GPU** for local Whisper transcription — no cloud transcription key required.
+3. Detects the most viral 30–90 s clip candidates via your choice of LLM: **DeepSeek** (default — cheap & fast), Claude, Gemini, OpenAI, Groq, OpenRouter, or local **Ollama** (fully offline).
+4. Renders 9:16 vertical clips (H.264) with optional burned-in caption styles, previews them inline, and downloads a ZIP of all clips.
+
+**How to use**
+1. Open the notebook via the badge above (or `colab/AutoShorts_Colab.ipynb` in this repo).
+2. *Runtime → Change runtime type → T4 GPU*.
+3. Edit the **CONFIG** cell: optionally set `YOUTUBE_URL`, the LLM provider, Whisper model size, clip count, and caption style.
+4. Run all cells — paste your API key(s) when prompted (only required for the chosen cloud LLM), then either upload a video/audio file or let the notebook pull a YouTube URL.
+
+The pipeline logic lives in [`colab/autoshorts_pipeline.py`](colab/autoshorts_pipeline.py) — a faithful Python port of the Rust backend (`src-tauri/src/{media,transcription,llm}.rs`). The same prompts, JSON parsing, and ffmpeg filters are used, so results match the desktop app.
+
+> ⚠️ Colab runs the *pipeline* headlessly. The full Tauri GUI remains a desktop app (see Releases above).
+
+---
+
 ## Developer Guide
 
 ### 1. Setup Environment Configuration
