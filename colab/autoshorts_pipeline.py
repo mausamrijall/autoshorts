@@ -890,7 +890,7 @@ def run_pipeline(
     transcription: str = "local",   # "local" (Whisper GPU) or "deepgram"
     transcription_api_key: Optional[str] = None,
     whisper_model: str = "base",
-    provider: str = "deepseek",      # deepseek|claude|gemini|openai|groq|openrouter|openai_compat|ollama
+    provider: str = "gemini",        # gemini(default,free)|deepseek|claude|openai|groq|openrouter|openai_compat|ollama
     provider_api_key: Optional[str] = None,
     provider_model: Optional[str] = None,
     provider_base_url: Optional[str] = None,  # required for provider="openai_compat"
@@ -1013,7 +1013,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--provider",
         choices=["deepseek", "claude", "gemini", "openai", "groq", "openrouter", "openai_compat", "ollama"],
-        default=os.environ.get("LLM_PROVIDER", "deepseek"),
+        default=os.environ.get("LLM_PROVIDER", "gemini"),
     )
     parser.add_argument("--provider-key", default=None)
     parser.add_argument("--provider-model", default=None)

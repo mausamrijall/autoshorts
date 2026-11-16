@@ -123,14 +123,14 @@ Run the full AutoShorts pipeline — media ingestion → **GPU-accelerated Whisp
 **What it does**
 1. Clones this repository into the Colab runtime.
 2. Uses the free **NVIDIA GPU** for local Whisper transcription — no cloud transcription key required.
-3. Detects the most viral 30–90 s clip candidates via your choice of LLM: **DeepSeek** (default — cheap & fast), Claude, Gemini, OpenAI, Groq, OpenRouter, any **OpenAI-compatible proxy/gateway** (via `openai_compat` base URL), or local **Ollama** (fully offline).
+3. Detects the most viral 30–90 s clip candidates via your choice of LLM: **Gemini** (default — free tier from Google AI Studio), DeepSeek, Claude, OpenAI, Groq, OpenRouter, any **OpenAI-compatible proxy/gateway** (via `openai_compat` base URL), or local **Ollama** (fully offline).
 4. Renders 9:16 vertical clips with **GPU-accelerated NVENC encoding** (automatic CPU `libx264` fallback) and optional burned-in caption styles, previews them inline, and downloads a ZIP of all clips.
 
 **How to use**
 1. Open the notebook via the badge above (or `colab/AutoShorts_Colab.ipynb` in this repo).
 2. *Runtime → Change runtime type → T4 GPU*.
 3. Edit the **CONFIG** cell: optionally set `YOUTUBE_URL`, the LLM provider, Whisper model size, clip count, and caption style.
-4. Run all cells — paste your API key(s) when prompted (only required for the chosen cloud LLM), then either upload a video/audio file or let the notebook pull a YouTube URL.
+4. Run all cells — paste your API key(s) when prompted (only required for the chosen cloud LLM; for the default **Gemini** provider, grab a free key at [Google AI Studio](https://aistudio.google.com/apikey)), then either upload a video/audio file or let the notebook pull a YouTube URL.
 
 The pipeline logic lives in [`colab/autoshorts_pipeline.py`](colab/autoshorts_pipeline.py) — a faithful Python port of the Rust backend (`src-tauri/src/{media,transcription,llm}.rs`). The same prompts, JSON parsing, and ffmpeg filters are used, so results match the desktop app.
 
