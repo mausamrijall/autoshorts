@@ -54,6 +54,19 @@ def require_ffmpeg() -> None:
         )
 
 
+def _ffmpeg_has_nvenc() -> bool:
+    """True when this ffmpeg build includes the NVIDIA NVENC H.264 encoder."""
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+        )
+        return "h264_nvenc" in out.stdout
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Media probing & audio extraction (port of media.rs)
 # ---------------------------------------------------------------------------
@@ -603,6 +616,42 @@ def detect_candidates_with_openrouter(
     return parse_candidate_json(text, _min_duration(transcript))
 
 
+def detect_candidates_with_openai_compat(
+    transcript: dict[str, Any],
+    api_key: str,
+    base_url: str,
+    model_name: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Any OpenAI-compatible endpoint (proxy/gateway/provider).
+
+    ``base_url`` is the API root that serves ``/chat/completions`` — e.g.
+    ``https://api.openai.com/v1``, ``https://api.groq.com/openai/v1``,
+    ``https://openrouter.ai/api/v1``, or a self-hosted LiteLLM/gateway.
+    """
+    import requests  # lazy
+    url = base_url.rstrip("/") + "/chat/completions"
+    model = (
+        model_name
+        or os.environ.get("OPENAI_COMPAT_MODEL")
+        or "gpt-4o-mini"
+    )
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": _user_content(transcript)}],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=300,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"OpenAI-compatible request failed ({resp.status_code}): {resp.text}")
+    text = resp.json()["choices"][0]["message"]["content"]
+    return parse_candidate_json(text, _min_duration(transcript))
+
+
 def detect_candidates_with_local_llm(
     transcript: dict[str, Any],
     model_name: str,
@@ -778,8 +827,14 @@ def render_flat_clip(
     end_sec: float,
     output_path: str | Path,
     drawtext_filters: Optional[str] = None,
+    gpu_encode: bool = False,
 ) -> str:
-    """Render a 9:16 vertical clip with optional burned-in captions."""
+    """Render a 9:16 vertical clip with optional burned-in captions.
+
+    When ``gpu_encode`` is True and this ffmpeg build has NVENC, the video
+    is encoded on the NVIDIA GPU (h264_nvenc); if that fails (e.g. no GPU
+    actually present) it automatically falls back to CPU libx264.
+    """
     require_ffmpeg()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -790,23 +845,33 @@ def render_flat_clip(
     probe = probe_media(source_path)
     has_video = bool(probe.get("has_video"))
 
-    cmd = ["ffmpeg", "-y", "-ss", start, "-i", source_path, "-t", duration]
+    def build_cmd(use_nvenc: bool) -> list[str]:
+        cmd = ["ffmpeg", "-y", "-ss", start, "-i", source_path, "-t", duration]
+        if has_video:
+            filter_expr = (
+                "crop=w='2*trunc(min(iw,ih*9/16)/2)':"
+                "h='2*trunc(min(ih,iw*16/9)/2)'"
+            )
+            if drawtext_filters:
+                filter_expr = f"{filter_expr},{drawtext_filters}"
+            cmd += ["-vf", filter_expr]
+            if use_nvenc:
+                cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-pix_fmt", "yuv420p"]
+            else:
+                cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p"]
+        else:
+            cmd += ["-vn"]
+        cmd += ["-c:a", "aac", "-b:a", "192k", str(output_path)]
+        return cmd
 
-    if has_video:
-        filter_expr = (
-            "crop=w='2*trunc(min(iw,ih*9/16)/2)':"
-            "h='2*trunc(min(ih,iw*16/9)/2)'"
-        )
-        if drawtext_filters:
-            filter_expr = f"{filter_expr},{drawtext_filters}"
-        cmd += ["-vf", filter_expr]
-        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p"]
-    else:
-        cmd += ["-vn"]
+    if gpu_encode and has_video and _ffmpeg_has_nvenc():
+        result = _run(build_cmd(True))
+        if result.returncode == 0:
+            return str(output_path)
+        # NVENC failed (e.g. no GPU present) — retry with CPU x264
+        print("[warn] h264_nvenc failed; falling back to libx264")
 
-    cmd += ["-c:a", "aac", "-b:a", "192k", str(output_path)]
-
-    result = _run(cmd)
+    result = _run(build_cmd(False))
     if result.returncode != 0:
         raise RuntimeError(
             "ffmpeg clip render failed: "
@@ -825,14 +890,16 @@ def run_pipeline(
     transcription: str = "local",   # "local" (Whisper GPU) or "deepgram"
     transcription_api_key: Optional[str] = None,
     whisper_model: str = "base",
-    provider: str = "deepseek",      # deepseek|claude|gemini|openai|groq|openrouter|ollama
+    provider: str = "deepseek",      # deepseek|claude|gemini|openai|groq|openrouter|openai_compat|ollama
     provider_api_key: Optional[str] = None,
     provider_model: Optional[str] = None,
+    provider_base_url: Optional[str] = None,  # required for provider="openai_compat"
     ollama_host: str = "http://localhost:11434",
     workdir: str | Path = ".",
     caption_style: str = "modern-box",
     num_clips: int = 5,
     render_clips: bool = True,
+    gpu_encode: bool = False,        # NVIDIA NVENC when available
 ) -> dict[str, Any]:
     """Run ingest -> transcribe -> detect -> render. Returns a result dict."""
     workdir = Path(workdir)
@@ -864,6 +931,14 @@ def run_pipeline(
         candidates = detect_candidates_with_local_llm(
             transcript, provider_model or "qwen2.5:7b", ollama_host
         )
+    elif provider == "openai_compat":
+        if not provider_api_key:
+            raise ValueError("provider='openai_compat' requires provider_api_key")
+        if not provider_base_url:
+            raise ValueError("provider='openai_compat' requires provider_base_url")
+        candidates = detect_candidates_with_openai_compat(
+            transcript, provider_api_key, provider_base_url, provider_model
+        )
     else:
         if not provider_api_key:
             raise ValueError(f"provider={provider!r} requires provider_api_key")
@@ -890,14 +965,18 @@ def run_pipeline(
                 caption_style,
             ) if render_clips else None
             render_flat_clip(
-                source_path, cand["start"], cand["end"], out_path, drawtext
+                source_path, cand["start"], cand["end"], out_path, drawtext,
+                gpu_encode=gpu_encode,
             )
             rendered.append({"rank": rank, **cand, "path": str(out_path)})
             print(f"    rendered clip-{rank:02d}_flat.mp4 ({cand['start']:.1f}-"
                   f"{cand['end']:.1f}s, score={cand['score']:.2f})")
         except Exception as exc:  # fall back to clean render, like the desktop app
             print(f"    caption render failed for rank {rank}: {exc}; retrying clean")
-            render_flat_clip(source_path, cand["start"], cand["end"], out_path)
+            render_flat_clip(
+                source_path, cand["start"], cand["end"], out_path,
+                gpu_encode=gpu_encode,
+            )
             rendered.append({"rank": rank, **cand, "path": str(out_path)})
 
     return {
@@ -933,15 +1012,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--whisper-model", default="base")
     parser.add_argument(
         "--provider",
-        choices=["deepseek", "claude", "gemini", "openai", "groq", "openrouter", "ollama"],
+        choices=["deepseek", "claude", "gemini", "openai", "groq", "openrouter", "openai_compat", "ollama"],
         default=os.environ.get("LLM_PROVIDER", "deepseek"),
     )
     parser.add_argument("--provider-key", default=None)
     parser.add_argument("--provider-model", default=None)
+    parser.add_argument("--provider-base-url", default=None)
     parser.add_argument("--ollama-host", default="http://localhost:11434")
     parser.add_argument("--caption-style", default="modern-box")
     parser.add_argument("--num-clips", type=int, default=5)
     parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--gpu-encode", action="store_true")
     args = parser.parse_args(argv)
 
     if args.provider_key is None:
@@ -952,6 +1033,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "openai": "OPENAI_API_KEY",
             "groq": "GROQ_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
+            "openai_compat": "OPENAI_COMPAT_API_KEY",
         }.get(args.provider, ""), "")
 
     result = run_pipeline(
@@ -962,11 +1044,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         provider=args.provider,
         provider_api_key=args.provider_key,
         provider_model=args.provider_model,
+        provider_base_url=args.provider_base_url,
         ollama_host=args.ollama_host,
         workdir=args.workdir,
         caption_style=args.caption_style,
         num_clips=args.num_clips,
         render_clips=not args.no_render,
+        gpu_encode=args.gpu_encode,
     )
     print(json.dumps({
         "candidates": result["candidates"],

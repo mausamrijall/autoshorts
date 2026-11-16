@@ -123,8 +123,8 @@ Run the full AutoShorts pipeline — media ingestion → **GPU-accelerated Whisp
 **What it does**
 1. Clones this repository into the Colab runtime.
 2. Uses the free **NVIDIA GPU** for local Whisper transcription — no cloud transcription key required.
-3. Detects the most viral 30–90 s clip candidates via your choice of LLM: **DeepSeek** (default — cheap & fast), Claude, Gemini, OpenAI, Groq, OpenRouter, or local **Ollama** (fully offline).
-4. Renders 9:16 vertical clips (H.264) with optional burned-in caption styles, previews them inline, and downloads a ZIP of all clips.
+3. Detects the most viral 30–90 s clip candidates via your choice of LLM: **DeepSeek** (default — cheap & fast), Claude, Gemini, OpenAI, Groq, OpenRouter, any **OpenAI-compatible proxy/gateway** (via `openai_compat` base URL), or local **Ollama** (fully offline).
+4. Renders 9:16 vertical clips with **GPU-accelerated NVENC encoding** (automatic CPU `libx264` fallback) and optional burned-in caption styles, previews them inline, and downloads a ZIP of all clips.
 
 **How to use**
 1. Open the notebook via the badge above (or `colab/AutoShorts_Colab.ipynb` in this repo).
